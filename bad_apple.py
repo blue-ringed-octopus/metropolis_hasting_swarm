@@ -8,39 +8,9 @@ Created on Sat Oct 26 23:19:22 2024
 import numpy as np
 import cv2
 from numba import cuda
+from numba.cuda import random
 TPB = 32
 
-@cuda.jit()
-def mh_kernel(d_out, d_epsilon, d_cov, d_normal, d_p, d_mu):
-    i = cuda.grid(1)
-    n = d_out.shape[0]
-    if i < n:
-        nmu = d_mu[i, 0]*d_normal[i, 0]+d_mu[i, 1] * \
-            d_normal[i, 1]+d_mu[i, 2]*d_normal[i, 2]
-        npoint = d_p[i, 0]*d_normal[i, 0]+d_p[i, 1] * \
-            d_normal[i, 1]+d_p[i, 2]*d_normal[i, 2]
-        ncn = d_cov[i, 0, 0]*d_normal[i, 0]**2 + 2*d_cov[i, 0, 1]*d_normal[i, 0]*d_normal[i, 1] + 2*d_cov[i, 0, 2]*d_normal[i, 0] * \
-            d_normal[i, 2] + d_cov[i, 1, 1]*d_normal[i, 1]**2 + 2*d_cov[i, 1, 2] * \
-            d_normal[i, 1]*d_normal[i, 2] + d_cov[i, 2, 2]*d_normal[i, 2]**2
-        
-      
-
-        d_out[i, 0] = d0
-        d_out[i, 1] = d1
-
-
-def get_md_par(points, mu, epsilon, cov, normal):
-    n = points.shape[0]
-    mu = np.ascontiguousarray(mu)
-    d_mu = cuda.to_device(mu)
-    d_cov = cuda.to_device(cov)
-    d_normal = cuda.to_device( np.ascontiguousarray(normal))
-    d_p = cuda.to_device(points)
-    thread = TPB
-    d_out = cuda.device_array((n, 2), dtype=(np.float64))
-    blocks = (n+TPB-1)//TPB
-    md_kernel[blocks, thread](d_out, epsilon, d_cov, d_normal, d_p, d_mu)
-    return d_out.copy_to_host()
 
     
 
@@ -65,7 +35,24 @@ cap.release()
 # cv2.destroyAllWindows()
 
 #%%
-def f(x, phi):
+import math 
+@cuda.jit(device=True)
+def d_g(x1, x2, u_max):
+    
+    dx = x2[0]-x1[0] 
+    dy = x2[1]-x1[1]
+    # dx = x2-x1
+    theta = math.atan2(dy, dx)
+    v = math.sqrt(dx*dx+dy*dy)
+    if (theta> u_max[1]) or ( theta< -u_max[1]) :
+        return 0
+    elif v>=u_max[0]:
+        return 0
+    else:
+        return 1/(u_max[1]) * 1/u_max[0]
+    
+@cuda.jit(device=True)
+def d_f(x, phi):
     h,w = phi.shape
     if x[0]<0 or x[0]>=w or \
        x[1]<0 or x[1]>=h:
@@ -75,34 +62,85 @@ def f(x, phi):
     j = int(x[1])
  
     return phi[-j,i]
+
+@cuda.jit()
+def mh_kernel(d_out, d_phi, d_x, d_u_max, rng_states):
+    i = cuda.grid(1)
+    n = d_out.shape[0]
+    if i < n:
+        x = d_x[i,:]
+        theta = random.xoroshiro128p_uniform_float64(rng_states,i)*2*(d_u_max[1]) - d_u_max[1]
+        v = random.xoroshiro128p_uniform_float64(rng_states, i)*d_u_max[0]
+        x_prime = (x[0]+v*math.cos(theta),x[1]+v*math.sin(theta) )
+        g1 = d_g(x_prime,x, d_u_max)
+        g2 = d_g(x,x_prime, d_u_max)
+    
+        A = min(1, (d_f(x_prime, d_phi)*g1)/((d_f(x, d_phi)*g2)))
+        if random.xoroshiro128p_uniform_float64(rng_states,i) <= A:
+            x0 = x_prime[0]
+            x1 = x_prime[1]
+        else:
+            x0 = x[0]
+            x1 = x[1]
+            
+        d_out[i, 0] = x0
+        d_out[i, 1] = x1
+        # d_out[i, :] = x
+
+def metropolis_hasting_par(x, phi, u_max):
+    n = x.shape[0]
+    d_phi = cuda.to_device(phi)
+    d_x = cuda.to_device(x)
+    d_u_max= cuda.to_device(u_max)
+
+    thread = TPB
+    d_out = cuda.device_array((n,2), dtype=(np.float64))
+    # d_out =  cuda.to_device(x)
+    blocks = (n+TPB-1)//TPB
+    rng_states = random.create_xoroshiro128p_states(TPB * blocks, seed=np.random.randint(0,2**32/2))
+
+    mh_kernel[blocks, thread](d_out, d_phi, d_x, d_u_max, rng_states)
+    return d_out.copy_to_host()
+
+
+# def f(x, phi):
+#     h,w = phi.shape
+#     if x[0]<0 or x[0]>=w or \
+#        x[1]<0 or x[1]>=h:
+#         return 0
+    
+#     i = int(x[0])
+#     j = int(x[1])
+ 
+#     return phi[-j,i]
     
 
     
-def g_sample(x):
-    theta = np.random.rand()*2*(u_max[1]) - u_max[1]
-    v = np.random.rand()*u_max[0]
-    x_new = x+v*np.array([np.cos(theta), np.sin(theta)])
-    return x_new
+# def g_sample(x):
+#     theta = np.random.rand()*2*(u_max[1]) - u_max[1]
+#     v = np.random.rand()*u_max[0]
+#     x_new = x+v*np.array([np.cos(theta), np.sin(theta)])
+#     return x_new
     
-def g(x1,x2): 
-    dx = x2-x1
-    theta = np.arctan2(dx[1], dx[0])
-    v = np.linalg.norm(dx)
-    if abs(theta)> u_max[1]:
-        return 0
-    elif v>=u_max[0]:
-        return 0
-    else:
-        return 1/(u_max[1]) * 1/u_max[0]
+# def g(x1,x2): 
+#     dx = x2-x1
+#     theta = np.arctan2(dx[1], dx[0])
+#     v = np.linalg.norm(dx)
+#     if abs(theta)> u_max[1]:
+#         return 0
+#     elif v>=u_max[0]:
+#         return 0
+#     else:
+#         return 1/(u_max[1]) * 1/u_max[0]
     
-def metropolis_hasting(x, phi):
-    x_prime = g_sample(x)
-    g1 = g(x_prime,x)
-    g2 = g(x,x_prime)
-    A = np.min([1, (f(x_prime, phi)*g1)/((f(x[i,:], phi)*g2))])
-    if np.random.rand() <= A:
-        x = x_prime
-    return x
+# def metropolis_hasting(x, phi):
+#     x_prime = g_sample(x)
+#     g1 = g(x_prime,x)
+#     g2 = g(x,x_prime)
+#     A = np.min([1, (f(x_prime, phi)*g1)/((f(x[i,:], phi)*g2))])
+#     if np.random.rand() <= A:
+#         x = x_prime
+#     return x
 
 dx = 1 
 u_max = [5, np.pi]
@@ -110,19 +148,12 @@ NUM_AGENT = 200
 h,w = frames[0].shape
 
 x = np.random.randint([0,0],[w,h], (NUM_AGENT,2))
-x = x.astype(np.float32)
+x = x.astype(np.float64)
 s = [x.copy()]
-pis = []
 for i in range(len(frames)):
-    pi = (255-frames[i])/np.sum((255-frames[i]))
-    pis.append(pi.copy())
-    for i in range(NUM_AGENT):
-        x_prime = g_sample(x[i,:])
-        g1 = g(x_prime,x[i,:])
-        g2 = g(x[i,:],x_prime)
-        A = np.min([1, (f(x_prime, pi)*g1)/((f(x[i,:], pi)*g2))])
-        if np.random.rand() <= A:
-            x[i,:]=x_prime
+# for i in range(1000):
+    phi = (255-frames[i])/np.sum((255-frames[i]))
+    x = metropolis_hasting_par(x, phi, u_max)
     s.append(x.copy())
    
 s = np.array(s)    
@@ -130,21 +161,21 @@ s = np.array(s)
 #%%
 import matplotlib.pyplot as plt 
     
-# plt.figure()    
-# ax = plt.gca()
-# ax.set_aspect('equal', adjustable='box')
-# plt.axis([0, w, 0, h])
+plt.figure()    
+ax = plt.gca()
+ax.set_aspect('equal', adjustable='box')
+plt.axis([0, w, 0, h])
 
-# for i in range(int(len(s)/10)):
-#     # plt.contourf(X,Y, pis[i*10], extent=[0,w, 0,h], cmap='Greys', levels = 100)
-#     # plt.imshow(pis[i*10], extent=[0,w, 0,h], cmap='Greys', alpha = 0.1)
-#     # plt.plot(s[:i*10,:, 0], s[:i*10,:, 1], marker="." ,color='k', alpha=0.01, markersize = 10)
-#     plt.plot(s[i*10,:,0], s[i*10,:,1], ".", color="black",  markersize = 15, alpha=0.5)
-#     plt.axis('square')
-#     plt.xlim(0 , w)
-#     plt.ylim(0, h)
-#     plt.pause(0.01)
-#     plt.close()  
+for i in range(5000):
+    # plt.contourf(X,Y, pis[i*10], extent=[0,w, 0,h], cmap='Greys', levels = 100)
+    plt.imshow(frames[i*30], extent=[0,w, 0,h], cmap='Greys', alpha = 0.1)
+    # plt.plot(s[:i*10,:, 0], s[:i*10,:, 1], marker="." ,color='k', alpha=0.01, markersize = 10)
+    plt.plot(s[i*30,:,0], s[i*30,:,1], ".", color="black",  markersize = 30, alpha=0.5)
+    plt.axis('square')
+    plt.xlim(0 , w)
+    plt.ylim(0, h)
+    plt.pause(0.01)
+    plt.close()  
     
  #%%
 from matplotlib.animation import FuncAnimation, PillowWriter
@@ -160,9 +191,9 @@ def animate(i):
     ax.clear()
     ax.set_xlim(0, w)
     ax.set_ylim(0, h)
-    swarm = ax.plot(s[i,:,0], s[i,:,1], ".", color="black",  markersize = 15, alpha = 0.5)
+    swarm = ax.plot(s[30*i,:,0], s[30*i,:,1], ".", color="black",  markersize = 15, alpha = 0.5)
    
     return swarm
         
-ani = FuncAnimation(fig, animate, interval=40, blit=True, repeat=True, frames=int(len(s)))    
+ani = FuncAnimation(fig, animate, interval=40, blit=True, repeat=True, frames=int(len(s)/30))    
 ani.save("bad_apple_swarm.mp4", dpi=500,  writer='ffmpeg')   
