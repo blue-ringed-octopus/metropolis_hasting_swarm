@@ -8,6 +8,10 @@ Created on Sat Oct  5 15:35:24 2024
 import numpy as np
 from scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt 
+from numba import cuda
+from numba.cuda import random
+from metropolis_hasting_par import metropolis_hasting_par
+from matplotlib.animation import FuncAnimation, PillowWriter
 
 def get_pdf(X,Y, mus, sigmas, weights):
     weights = weights/np.sum(weights)
@@ -52,9 +56,9 @@ def g(x1,x2):
         return 1/(u_max[1]) * 1/u_max[0]
 
 x_max = 1
-dx = 500 
+dx = 250 
 x = np.linspace(0,x_max, dx)
-u_max = [0.1, np.pi]
+u_max = [0.01, np.pi]
 X,Y = np.meshgrid(x,x)
 
 mus = [np.array([0.5,0.5])]
@@ -83,7 +87,6 @@ for i in range(50000):
    
 s = np.array(s)    
 #%%    
-from matplotlib.animation import FuncAnimation, PillowWriter
 fig = plt.figure()    
 ax = plt.gca()
 ax.set_aspect('equal', adjustable='box')
@@ -118,17 +121,20 @@ NUM_AGENT = 100
 x = np.random.rand(NUM_AGENT, 2)
 s = [x.copy()]
 pis = []
-for i in range(5000):
-    mus = [np.array([0.8,0.4]), np.array([0.2+0.001*i,0.8])]
-    pi = get_pdf(X,Y,mus,sigmas, [0.5, 0.5])
-    pis.append(pi.copy())
-    for i in range(NUM_AGENT):
-        x_prime = g_sample(x[i,:])
-        g1 = g(x_prime,x[i,:])
-        g2 = g(x[i,:],x_prime)
-        A = np.min([1, (f(x_prime, pi)*g1)/((f(x[i,:], pi)*g2))])
-        if np.random.rand() <= A:
-            x[i,:]=x_prime
+for i in range(1000):
+  #  mus = [np.array([0.8,0.4]), np.array([0.2+0.001*i,0.8])]
+    mus =  [np.array([0.5,0.5])]
+    phi = get_pdf(X,Y,mus,sigmas, [0.5, 0.5])
+    pis.append(phi.copy())
+    x = metropolis_hasting_par(x, [dx,dx], phi, u_max)
+
+    # for i in range(NUM_AGENT):
+    #     x_prime = g_sample(x[i,:])
+    #     g1 = g(x_prime,x[i,:])
+    #     g2 = g(x[i,:],x_prime)
+    #     A = np.min([1, (f(x_prime, pi)*g1)/((f(x[i,:], pi)*g2))])
+    #     if np.random.rand() <= A:
+    #         x[i,:]=x_prime
     s.append(x.copy())
    
 s = np.array(s)        
@@ -144,21 +150,22 @@ s = np.array(s)
 # for i in range(len(s)-1):
 #     plt.plot(s[i,:, 0], s[i,:, 1], marker="." ,color='k', alpha=0.01, markersize = 10)
     
-# plt.figure()    
-# ax = plt.gca()
-# ax.set_aspect('equal', adjustable='box')
-# plt.axis([0, x_max, 0, x_max])
+plt.figure()    
+ax = plt.gca()
+ax.set_aspect('equal', adjustable='box')
+plt.axis([0, x_max, 0, x_max])
 
-# for i in range(int(len(s)/10)):
-#     plt.contourf(X,Y, pis[i*10], extent=[0,x_max, 0,x_max], cmap='Greys', levels = 100)
-#     # plt.plot(s[:i*10,:, 0], s[:i*10,:, 1], marker="." ,color='k', alpha=0.01, markersize = 10)
-#     plt.plot(s[i*10,:,0], s[i*10,:,1], ".", color="red",  markersize = 10)
-#     plt.axis('square')
-#     plt.ylim(0, x_max)
-#     plt.xlim(0 , x_max)
-#     plt.pause(0.01)
-#     plt.close()
+for i in range(int(len(s)/10)):
+    plt.contourf(X,Y, pis[i*10], extent=[0,x_max, 0,x_max], cmap='Greys', levels = 100)
+    # plt.plot(s[:i*10,:, 0], s[:i*10,:, 1], marker="." ,color='k', alpha=0.01, markersize = 10)
+    plt.plot(s[i*10,:,0], s[i*10,:,1], ".", color="red",  markersize = 10)
+    plt.axis('square')
+    plt.ylim(0, x_max)
+    plt.xlim(0 , x_max)
+    plt.pause(0.01)
+    plt.close()
 #%%
+step = 2
 fig = plt.figure()    
 ax = plt.gca()
 ax.set_aspect('equal', adjustable='box')
@@ -170,10 +177,11 @@ def animate(i):
     ax.clear()
     ax.set_xlim(0, x_max)
     ax.set_ylim(0, x_max)
-    dist = ax.contourf(X,Y, pis[i], extent=[0,x_max, 0,x_max], cmap='Greys', levels = 100)
-    swarm = ax.plot(s[i,:,0], s[i,:,1], ".", color="red",  markersize = 10)
+    dist = ax.contourf(X,Y, pis[i*step], extent=[0,x_max, 0,x_max], cmap='Greys', levels = 100)
+    swarm = ax.plot(s[i*step,:,0], s[i*step,:,1], ".", color="red",  markersize = 10)
    
     return swarm+[dist]
         
-ani = FuncAnimation(fig, animate, interval=40, blit=True, repeat=True, frames=int(len(s)/10))    
-ani.save("metropolis_hasting_swarm.gif", dpi=300, writer=PillowWriter(fps=25))
+ani = FuncAnimation(fig, animate, interval=40, blit=True, repeat=True, frames=len(s)//step)    
+# ani.save("metropolis_hasting_swarm.gif", dpi=300, writer=PillowWriter(fps=25))
+ani.save("chemotaxis.gif", dpi=300, writer=PillowWriter(fps=25))

@@ -4,7 +4,6 @@ Created on Sat Oct 26 23:19:22 2024
 
 @author: hibad
 """
-
 import numpy as np
 import cv2
 from numba import cuda
@@ -101,46 +100,6 @@ def metropolis_hasting_par(x, phi, u_max):
 
     mh_kernel[blocks, thread](d_out, d_phi, d_x, d_u_max, rng_states)
     return d_out.copy_to_host()
-
-
-# def f(x, phi):
-#     h,w = phi.shape
-#     if x[0]<0 or x[0]>=w or \
-#        x[1]<0 or x[1]>=h:
-#         return 0
-    
-#     i = int(x[0])
-#     j = int(x[1])
- 
-#     return phi[-j,i]
-    
-
-    
-# def g_sample(x):
-#     theta = np.random.rand()*2*(u_max[1]) - u_max[1]
-#     v = np.random.rand()*u_max[0]
-#     x_new = x+v*np.array([np.cos(theta), np.sin(theta)])
-#     return x_new
-    
-# def g(x1,x2): 
-#     dx = x2-x1
-#     theta = np.arctan2(dx[1], dx[0])
-#     v = np.linalg.norm(dx)
-#     if abs(theta)> u_max[1]:
-#         return 0
-#     elif v>=u_max[0]:
-#         return 0
-#     else:
-#         return 1/(u_max[1]) * 1/u_max[0]
-    
-# def metropolis_hasting(x, phi):
-#     x_prime = g_sample(x)
-#     g1 = g(x_prime,x)
-#     g2 = g(x,x_prime)
-#     A = np.min([1, (f(x_prime, phi)*g1)/((f(x[i,:], phi)*g2))])
-#     if np.random.rand() <= A:
-#         x = x_prime
-#     return x
 
 dx = 1 
 u_max = [5, np.pi]
